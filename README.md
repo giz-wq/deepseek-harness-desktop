@@ -1,6 +1,10 @@
 # DeepSeek Harness Desktop（桌面端）
 
-> **二创声明**：本项目是对 DeepSeek 官方的开源项目 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（GitHub Clone 级别，MIT 开源协议）进行**二次创作**的桌面端封装。本项目**不涉及任何商业价值**，仅作为技术学习与个人使用的二创作品，明确仅对其做二次创作，无意替代或商业化官方项目。
+> **二创声明（重点强调）**：本项目是对 DeepSeek 官方的开源项目 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（MIT 开源协议）进行的**二次创作**桌面端封装。
+>
+> ⚠️ **必须明确：本仓库纯属个人娱乐爱好的技术学习作品，不涉及任何商业性用途，不具备任何商业价值，也不用于任何营利用途。** 本项目**仅做二次创作**，无意替代、资助或商业化官方项目，无意利用 DeepSeek 品牌牟利。
+>
+> 如 DeepSeek 官方或原作者认为本项目有任何不妥，欢迎联系我，我会立即下架相关内容。此声明对仓库内所有内容（含源码与发布产出的安装包）均有效。
 
 ## 项目简介
 
@@ -58,4 +62,6 @@ npm run dist     # 生成 macOS .app / .dmg / .zip
 
 ## License
 
-本项目采用 **MIT License**（与上游 `deepseek-ai/deepseek-harness` 一致）。上游项目版权归 DeepSeek 团队所有，本项目为二创封装，所有 dsh 核心逻辑版权归 DeepSeek 团队所有。
+本项目采用 **MIT License**（与上游 `deepseek-ai/deepseek-harness` 一致）。
+
+> 非商业二创声明：上游 dsh 核心逻辑版权归 DeepSeek 团队所有。本项目仅做桌面端封装这一二次创作，纯属个人娱乐爱好的技术学习，不涉及任何商业性用途。若 DeepSeek 官方或原作者认为有任何不妥，可随时联系我下架。
