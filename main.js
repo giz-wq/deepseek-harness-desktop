@@ -1,14 +1,23 @@
 // DeepSeek Harness Desktop — Electron 主进程
 // 后台拉起 `dsh web` 本地服务，解析实际端口后在 BrowserWindow 中加载 Web UI。
-const { app, BrowserWindow, dialog, shell } = require('electron')
+// 附带功能：GitHub 更新检查 + skill 导入。
+const { app, BrowserWindow, dialog, shell, Menu, ipcMain } = require('electron')
 const { spawn } = require('node:child_process')
 const http = require('node:http')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
 
 // dsh CLI 入口（npm 包 @deepseek-ai/dsh 的 bin）
 const DSH_BIN = require.resolve('@deepseek-ai/dsh/lib/bin.js')
 
 const STARTUP_TIMEOUT_MS = 90_000
 const URL_PATTERN = /dsh web: (http:\/\/127\.0\.0\.1:(\d+))/
+
+// ---- 本项目更新配置 ----
+const GITHUB_REPO = 'giz-wq/deepseek-harness-desktop'        // 远端仓库
+const APP_VERSION = require('./package.json').version        // 本地版本
+const SKILLS_DIR = path.join(os.homedir(), '.dsh', 'skills') // dsh 用户级 skill 根目录
 
 let serverProcess = null
 let mainWindow = null
@@ -28,8 +37,6 @@ if (!app.requestSingleInstanceLock()) {
 
 // ---- 后台服务进程管理 ----
 function startServer() {
-  // 用 Electron 自带的 Node 运行时执行 dsh CLI；detached 让子进程成为
-  // 新进程组组长，退出时可用 kill(-pid) 整组回收（含 dsh 派生的子进程）。
   console.log('[dsh-desktop] spawning:', process.execPath, DSH_BIN)
   serverProcess = spawn(process.execPath, ['--expose-internals', DSH_BIN, 'web', '--no-open', '--port', '0'], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
@@ -62,7 +69,7 @@ function startServer() {
       if (match) {
         serverProcess.stdout.off('data', onData)
         clearTimeout(timer)
-        resolve(match[1]) // http://127.0.0.1:PORT
+        resolve(match[1])
       }
     }
     serverProcess.stdout.on('data', onData)
@@ -79,7 +86,6 @@ function startServer() {
 function stopServer() {
   if (serverProcess === null || serverProcess.killed) return
   try {
-    // 杀整个进程组，回收 dsh 派生的子进程（语言服务、沙箱等）
     process.kill(-serverProcess.pid, 'SIGTERM')
   } catch {
     try { serverProcess.kill('SIGTERM') } catch { /* 已退出 */ }
@@ -108,6 +114,234 @@ function waitHttpReady(url, timeoutMs = 30_000) {
   })
 }
 
+// ---- 版本比较：将 tag 解析为数值数组，a 是否比 b 新 ----
+function parseVersion(tag) {
+  const raw = String(tag ?? '').replace(/^v/, '').trim()
+  if (!raw) return [0]
+  return raw.split('.').map(Number)
+}
+function isNewer(lhs, rhs) {
+  const a = parseVersion(lhs)
+  const b = parseVersion(rhs)
+  const len = Math.max(a.length, b.length)
+  for (let i = 0; i < len; i++) {
+    const x = a[i] ?? 0
+    const y = b[i] ?? 0
+    if (x > y) return true
+    if (x < y) return false
+  }
+  return false
+}
+
+// ---- 向 dsh Web 页面顶部居中注入更新提示条 ----
+function buildUpdateBannerHtml(newVersion) {
+  return `
+  <div id="dsh-update-banner" style="position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:2147483000;display:flex;align-items:center;gap:12px;padding:12px 16px 12px 20px;border-radius:14px;background:rgba(28,28,32,0.92);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:0 8px 30px rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.08);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <span style="color:#f2f2f5;font-size:14px;font-weight:500;white-space:nowrap;">发现新版本 ${newVersion}</span>
+    <button id="dsh-update-btn" style="cursor:pointer;border:none;border-radius:8px;padding:7px 18px;font-size:13px;font-weight:600;color:#ffffff;background:#1f1f22;box-shadow:0 2px 12px rgba(0,0,0,0.35);transition:transform .18s ease,box-shadow .18s ease;animation:dshPulse 2s ease-in-out infinite;">更新</button>
+    <button id="dsh-update-close" style="cursor:pointer;border:none;background:transparent;color:#a1a1ab;font-size:18px;line-height:1;padding:2px 6px;">&times;</button>
+  </div>
+  <style>
+    @keyframes dshPulse {
+      0%,100% { box-shadow:0 2px 12px rgba(0,0,0,0.35),0 0 0 0 rgba(63,131,248,0); }
+      50%      { box-shadow:0 2px 14px rgba(0,0,0,0.45),0 0 0 6px rgba(63,131,248,0.25); }
+    }
+    #dsh-update-btn:hover { transform:translateY(-1px); box-shadow:0 4px 18px rgba(63,131,248,0.4); animation:none; }
+  </style>`
+}
+
+function injectUpdateBanner(newVersion) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const script = `
+    (function(){
+      if (document.getElementById('dsh-update-banner')) return;
+      var host = document.createElement('div');
+      host.id = 'dsh-update-host';
+      host.innerHTML = ${JSON.stringify(buildUpdateBannerHtml(newVersion))};
+      document.body.appendChild(host);
+      document.getElementById('dsh-update-btn').addEventListener('click', function(){
+        window.dshDesktop && window.dshDesktop.requestUpdate();
+      });
+      document.getElementById('dsh-update-close').addEventListener('click', function(){
+        var h = document.getElementById('dsh-update-host');
+        if (h) h.remove();
+      });
+    })()
+  `
+  // 页面可能是 SPA，等 body 就绪后再注入，重试；执行后自我确认是否注入成功
+  let tries = 0
+  const attempt = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    mainWindow.webContents.executeJavaScript(`(function(){ return !!document.body })()`)
+      .then((hasBody) => {
+        if (hasBody) {
+          return mainWindow.webContents.executeJavaScript(script).catch((err) => {
+            console.log("[dsh-desktop] inject error:", err && err.message);
+          }).then(() => 
+            mainWindow.webContents.executeJavaScript(`(function(){ return document.getElementById("dsh-update-banner") ? true : false })()`)
+          ).then((ok) => console.log("[dsh-desktop] banner present =", ok))
+        } else if (tries < 40) {
+          tries++
+          setTimeout(attempt, 300)
+        }
+      }).catch((err) => console.log("[dsh-desktop] body check error:", err && err.message))
+  }
+  attempt()
+}
+
+// ---- GitHub 更新检查 ----
+async function checkForUpdate() {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+      headers: { 'User-Agent': 'dsh-desktop', 'Accept': 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) {
+      console.log(`[dsh-desktop] update check http ${res.status}`)
+      return
+    }
+    const data = await res.json()
+    const latestTag = data?.tag_name
+    if (!latestTag) return
+    console.log(`[dsh-desktop] remote=${latestTag} local=${APP_VERSION}`)
+    if (isNewer(latestTag, APP_VERSION)) {
+      injectUpdateBanner(latestTag)
+    }
+  } catch (error) {
+    console.log('[dsh-desktop] update check skipped:', error?.message ?? error)
+  }
+}
+
+// ---- 更新：下载新版 dmg 到 Downloads 并打开安装镜像 ----
+function findDmgAsset(assets) {
+  if (!Array.isArray(assets)) return null
+  const dmg = assets.find((a) => a.name && a.name.endsWith('.dmg'))
+  return dmg ? dmg.browser_download_url : null
+}
+
+async function downloadAndInstall(latestTag) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: '开始更新',
+    message: `正在下载 DeepSeek Harness ${latestTag}...`,
+    detail: '下载完成后会自动打开安装镜像，请把 App 拖入「应用程序」覆盖安装完成更新。',
+  })
+  try {
+    const release = await (await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+      headers: { 'User-Agent': 'dsh-desktop', 'Accept': 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(15_000),
+    })).json()
+    const url = findDmgAsset(release?.assets)
+    if (!url) throw new Error('Release 中未找到 dmg 安装包')
+    const dest = path.join(os.homedir(), 'Downloads', `DeepSeek Harness-${latestTag}.dmg`)
+    const fileRes = await fetch(url, { redirect: 'follow' })
+    if (!fileRes.ok || !fileRes.body) throw new Error(`下载失败 HTTP ${fileRes.status}`)
+    const ws = fs.createWriteStream(dest)
+    await new Promise((resolve, reject) => {
+      fileRes.body.pipe(ws)
+      fileRes.body.on('error', reject)
+      ws.on('finish', resolve)
+      ws.on('error', reject)
+    })
+    shell.openPath(dest)
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: '下载完成',
+      message: `新版本 ${latestTag} 已下载完成`,
+      detail: `安装镜像：${dest}\n\n打开后请把 DeepSeek Harness.app 拖入「应用程序」以更新。`,
+    })
+  } catch (error) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'error',
+      title: '更新失败',
+      message: String(error?.message ?? error),
+    })
+  }
+}
+
+// ---- skill 导入 ----
+function validateSkillDir(p) {
+  return fs.existsSync(path.join(p, 'SKILL.md'))
+}
+function validateSkillFile(p) {
+  return p.toLowerCase().endsWith('.md')
+}
+
+async function importSkill() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '导入本地 Skill',
+    buttonLabel: '导入',
+    properties: ['openFile', 'openDirectory', 'multiSelections'],
+    filters: [{ name: 'Skill 文件', extensions: ['md'] }],
+  })
+  if (result.canceled || result.filePaths.length === 0) return
+
+  fs.mkdirSync(SKILLS_DIR, { recursive: true })
+  const imported = []
+  let skipped = 0
+  for (const src of result.filePaths) {
+    try {
+      const stat = fs.statSync(src)
+      const base = path.basename(src)
+      if (stat.isDirectory() && validateSkillDir(src)) {
+        const dest = path.join(SKILLS_DIR, base)
+        fs.cpSync(src, dest, { recursive: true, force: true })
+        imported.push(base)
+      } else if (stat.isFile() && validateSkillFile(src)) {
+        fs.copyFileSync(src, path.join(SKILLS_DIR, base))
+        imported.push(base)
+      } else {
+        skipped++
+      }
+    } catch (error) {
+      console.log('[dsh-desktop] importSkill failed for', src, error?.message ?? error)
+      skipped++
+    }
+  }
+
+  if (imported.length > 0) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: '导入成功',
+      message: `已导入 ${imported.length} 个 Skill`,
+      detail: imported.join('、') + '\n\ndsh 会自动检测并加载到技能目录。稍后即可在对话中使用。',
+    })
+  } else if (skipped > 0) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: '未导入有效的 Skill',
+      message: '未找到可导入的 Skill 文件',
+      detail: '请选择：\n• 含 SKILL.md 的文件夹\n• 以 .md 结尾、带 name/description frontmatter 的 Skill 文件',
+    })
+  }
+}
+
+
+function installDiagnostics() {
+  if (mainWindow) {
+    mainWindow.webContents.on('console-message', (e, level, message) => {
+      if (/banner|dshDesktop|update/i.test(message)) console.log('[renderer]', message);
+    });
+  }
+}
+
+// ---- 菜单：提供导入 Skill 入口 ----
+function installMenu() {
+  const template = [
+    {
+      label: 'DeepSeek Harness',
+      submenu: [
+        { label: '导入本地 Skill...', click: () => importSkill() },
+        { type: 'separator' },
+        { role: 'quit', label: '退出 DeepSeek Harness' },
+      ],
+    },
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
 // ---- 窗口 ----
 function createWindow(url) {
   mainWindow = new BrowserWindow({
@@ -121,12 +355,13 @@ function createWindow(url) {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: path.join(__dirname, 'preload.js'),
     },
   })
 
   mainWindow.loadURL(url)
+  installDiagnostics()
 
-  // 页内新窗口/外链交给系统浏览器
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
     shell.openExternal(target)
     return { action: 'deny' }
@@ -144,6 +379,9 @@ async function bootstrap() {
     await waitHttpReady(url)
     console.log('[dsh-desktop] http ready, creating window')
     createWindow(url)
+
+    installMenu()
+    checkForUpdate()
   } catch (error) {
     stopServer()
     dialog.showErrorBox(
@@ -154,10 +392,27 @@ async function bootstrap() {
   }
 }
 
-app.whenReady().then(bootstrap)
+function registerIpc() {
+  ipcMain.handle('dsh:request-update', async () => {
+    try {
+      const res = await fetch('https://api.github.com/repos/' + GITHUB_REPO + '/releases/latest', {
+        headers: { 'User-Agent': 'dsh-desktop', 'Accept': 'application/vnd.github+json' },
+        signal: AbortSignal.timeout(15_000),
+      });
+      const release = await res.json();
+      await downloadAndInstall(release && release.tag_name ? release.tag_name : '最新版');
+    } catch (error) {
+      dialog.showMessageBox(mainWindow, { type: 'error', title: '更新失败', message: String(error && error.message ? error.message : error) });
+    }
+  });
+  ipcMain.handle('dsh:import-skill', async () => {
+    await importSkill();
+  });
+}
+
+app.whenReady().then(async () => { registerIpc(); await bootstrap() })
 
 app.on('window-all-closed', () => {
-  // macOS 惯例是驻留，但本应用窗口即全部 UI，直接退出并回收后台服务
   app.quit()
 })
 

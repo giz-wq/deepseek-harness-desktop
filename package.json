@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
   "productName": "DeepSeek Harness",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "DeepSeek Harness (dsh) 桌面端：后台运行 dsh web 服务并以原生窗口加载 Web UI",
   "license": "MIT",
   "main": "main.js",
@@ -215,6 +215,7 @@
     "asar": false,
     "files": [
       "main.js",
+      "preload.js",
       "package.json",
       "node_modules/**"
     ],
