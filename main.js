@@ -189,63 +189,189 @@ function injectUpdateBanner(newVersion) {
   attempt()
 }
 
-// ---- 设置弹窗内的「版本与更新」条形（挂在 body 上，设置弹窗打开时吸附其下方显示）----
-function buildVersionBarJs() {
+// ---- 设置弹窗内的「版本与更新」设置项 + 插件页「添加插件」按钮注入 ----
+// 设置弹窗由编译后的 dsh Web SPA（React）渲染。此处在每次弹窗打开时向真实 DOM
+// 注入：① 在「Agent 预设」导航项下方新增一个「版本与更新」导航项及其内容面板
+// （LOGO + 当前版本 + 检查更新按钮）；② 在「插件」页标题行右侧注入「添加插件」按钮。
+// 通过监听弹窗内部的变化完成注入，RelaX 关闭重开时自动重建。
+function buildSettingsEntranceJs() {
+  const NAV_ICON =
+    '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" style="display:block;"><path d="M13.5 8a5.5 5.5 0 1 1-1.9-4.2"/><path d="M13.5 1.6v2.7h-2.7"/></svg>'
+  const LOGO_SVG =
+    '<svg id="dsh-logo" width="80" height="80" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="dshLogoGrad" x1="4" y1="4" x2="92" y2="92" gradientUnits="userSpaceOnUse"><stop stop-color="#3b82f6"/><stop offset="1" stop-color="#10b981"/></linearGradient></defs><rect x="4" y="4" width="88" height="88" rx="24" fill="url(#dshLogoGrad)"/><path d="M28 60c7-18 33-18 44-3 4 5 4 12 0 16-10 9-25 7-35-1-3-2-4-6-4-9 0-1 0-2-1-3z" fill="#fff"/><path d="M68 59c5 0 9 1 11 3 2 2 2 5 0 7" stroke="#0f766e" stroke-width="2.4" stroke-linecap="round" fill="none"/><path d="M30 70c-3 3-4 7-3 10 5-2 8-4 10-7" fill="#0f766e" opacity=".85"/><circle cx="34" cy="58" r="2.6" fill="#0f766e"/></svg>'
   return `(function(){
-    if (window.__dshVersionBar) return;
-    var VERSION = "VERSION_PLACEHOLDER";
-    var bar = document.createElement('div');
-    bar.id = 'dsh-version-bar';
-    bar.style.cssText = "position:fixed;left:50%;transform:translateX(-50%);z-index:2147483001;display:none;align-items:center;gap:14px;padding:10px 18px;border-radius:12px;background:rgba(31,31,34,0.96);border:1px solid rgba(255,255,255,0.10);box-shadow:0 8px 26px rgba(0,0,0,0.45);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#ededf0;";
-    bar.innerHTML =
-      '<span style="font-size:13px;white-space:nowrap;">版本 <b style="color:#fff;">v' + VERSION + '</b></span>' +
-      '<button id="dsh-ver-check" style="cursor:pointer;border:none;border-radius:7px;padding:6px 14px;font-size:12px;font-weight:600;color:#fff;background:#3b82f6;box-shadow:0 2px 10px rgba(59,130,246,0.35);transition:transform .15s ease;">检查更新</button>' +
-      '<button id="dsh-import-skill" style="cursor:pointer;border:none;border-radius:7px;padding:6px 14px;font-size:12px;font-weight:600;color:#fff;background:#10b981;box-shadow:0 2px 10px rgba(16,185,129,0.35);transition:transform .15s ease;">导入插件</button>';
-    document.body.appendChild(bar);
-    document.getElementById('dsh-ver-check').addEventListener('click', function(){
-      if (window.dshDesktop && window.dshDesktop.checkUpdate) window.dshDesktop.checkUpdate();
-    });
-    document.getElementById('dsh-import-skill').addEventListener('click', function(){
-      if (window.dshDesktop && window.dshDesktop.importSkill) window.dshDesktop.importSkill();
-    });
-    function place(){
-      var dlg = document.querySelector('[role="dialog"][aria-modal="true"], [data-modals-root] [role="dialog"], [class*="modal"] [class*="visible"]');
-      if (!dlg) { bar.style.display = 'none'; return; }
-      var r = dlg.getBoundingClientRect();
-      var vh = window.innerHeight;
-      if (r.bottom < 0 || r.top > vh) { bar.style.display = 'none'; return; }
-      var top = r.bottom + 12;
-      if (top + bar.offsetHeight + 16 > vh) top = Math.max(12, r.top - bar.offsetHeight - 12);
-      bar.style.top = top + 'px';
-      bar.style.display = 'flex';
+    if (window.__dshSettingsEntrance) return;
+    window.__dshSettingsEntrance = true;
+    var VERSION = ${JSON.stringify(APP_VERSION)};
+    var NAV_ICON = ${JSON.stringify(NAV_ICON)};
+    var LOGO_SVG = ${JSON.stringify(LOGO_SVG)};
+
+    var currentPanel = null;
+    var opts = null;        // 当前弹窗的滚动内容区
+    var versionPanel = null;
+
+    function isOurRow(el){ return !!el && el.id === 'dsh-nav-version'; }
+
+    // 找到设置弹窗的滚动内容区（第一个带纵向滚动的 div）
+    function findOptions(dialog){
+      var divs = dialog.querySelectorAll('div');
+      for (var i = 0; i < divs.length; i++){
+        var el = divs[i];
+        if (el.id === 'dsh-version-panel') continue;
+        var cs = getComputedStyle(el);
+        if (cs.overflowY === 'auto' || cs.overflowY === 'scroll') return el;
+      }
+      return null;
     }
-    var mo = new MutationObserver(place);
-    mo.observe(document.body, { childList: true, subtree: true });
-    window.addEventListener('resize', place);
-    window.__dshVersionBar = true;
-    setTimeout(place, 500);
+
+    // 选中「版本与更新」：隐藏原生内容，显示我们的面板
+    function selectVersion(){
+      if (!opts || !versionPanel) return;
+      for (var i = 0; i < opts.children.length; i++){
+        if (opts.children[i] === versionPanel) continue;
+        opts.children[i].style.display = 'none';
+      }
+      versionPanel.style.display = 'flex';
+    }
+    // 选中其它导航项：恢复原生内容，隐藏我们的面板
+    function selectNative(){
+      if (!opts || !versionPanel) return;
+      for (var i = 0; i < opts.children.length; i++){
+        if (opts.children[i] === versionPanel) continue;
+        opts.children[i].style.display = '';
+      }
+      versionPanel.style.display = 'none';
+    }
+    // 高亮导航项
+    function markActive(row){
+      if (!row || !row.parentNode) return;
+      var cells = row.parentNode.querySelectorAll('button');
+      for (var i = 0; i < cells.length; i++){
+        var c = cells[i];
+        if (c === row){
+          c.style.background = 'var(--dsw-specific-sidebar-nav-item-active, rgba(255,255,255,0.08))';
+          if (c.getAttribute('aria-current') !== 'true') c.setAttribute('aria-current', 'true');
+        } else {
+          c.style.background = '';
+          c.removeAttribute('aria-current');
+        }
+      }
+    }
+
+    // 注入导航项 + 版本面板
+    function setupVersionNav(dialog, agentBtn){
+      var navList = agentBtn.parentNode;
+      if (navList && !dialog.querySelector('#dsh-nav-version')){
+        var row = document.createElement('button');
+        row.type = 'button'; row.id = 'dsh-nav-version';
+        row.style.cssText = "box-sizing:border-box;cursor:pointer;height:40px;color:var(--dsw-alias-label-primary, #f2f2f5);text-align:left;background:0 0;border:none;border-radius:12px;align-items:center;gap:8px;padding:9px 16px 9px 12px;font-family:inherit;font-size:14px;font-weight:400;line-height:22px;display:flex;";
+        row.innerHTML = '<span style="flex:none;display:inline-flex;">' + NAV_ICON + '</span><span style="white-space:nowrap;text-overflow:ellipsis;flex:1;min-width:0;overflow:hidden;">版本与更新</span>';
+        agentBtn.parentNode.insertBefore(row, agentBtn.nextSibling);
+        row.addEventListener('click', function(){ selectVersion(); markActive(row); });
+        if (!navList.__dshWired){
+          navList.__dshWired = true;
+          navList.addEventListener('click', function(e){
+            var b = e.target && e.target.closest ? e.target.closest('button') : null;
+            if (!b || isOurRow(b)) return;
+            selectNative(); markActive(b);
+          });
+        }
+      }
+      if (!versionPanel && opts){
+        versionPanel = document.createElement('div');
+        versionPanel.id = 'dsh-version-panel';
+        versionPanel.style.cssText = "position:absolute;inset:0;z-index:5;overflow:auto;box-sizing:border-box;display:none;align-items:center;justify-content:center;background:var(--dsw-alias-bg-layer-2, #1e1e22);padding:24px;";
+        versionPanel.innerHTML =
+          '<div style="display:flex;flex-direction:column;align-items:center;gap:14px;max-width:360px;text-align:center;">' +
+            LOGO_SVG +
+            '<div style="font-size:20px;font-weight:600;color:var(--dsw-alias-label-primary, #f2f2f5);">DeepSeek Harness</div>' +
+            '<div style="font-size:14px;color:var(--dsw-alias-label-secondary, #a1a1ab);">当前版本 <b style="color:var(--dsw-alias-label-primary, #f2f2f5);">v' + VERSION + '</b></div>' +
+            '<p style="margin:0;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-tertiary, #8a8a94);">桌面端封装了 dsh 本地服务，提供后台更新检查与本地 Skill/插件导入。</p>' +
+            '<button id="dsh-check-update" style="cursor:pointer;border:none;border-radius:9px;padding:9px 22px;font-size:14px;font-weight:600;color:#fff;background:#3b82f6;box-shadow:0 2px 12px rgba(59,130,246,0.35);transition:transform .15s ease;">检查更新</button>' +
+          '</div>';
+        opts.style.position = 'relative';
+        opts.appendChild(versionPanel);
+        document.getElementById('dsh-check-update').addEventListener('click', function(){
+          if (window.dshDesktop && window.dshDesktop.checkUpdate) window.dshDesktop.checkUpdate();
+        });
+      }
+    }
+
+    // 注入「添加插件」按钮（插件页标题行右侧）
+    function mountPluginsButton(){
+      if (!opts) return;
+      var els = opts.querySelectorAll('h2');
+      var target = null;
+      for (var i = 0; i < els.length; i++){
+        var t = (els[i].textContent || '').replace(/\\s+/g, ' ').trim();
+        if (/插件/.test(t) || /^Plugins$/i.test(t)){ target = els[i]; break; }
+      }
+      var existing = opts.querySelector('#dsh-add-plugin');
+      if (target){
+        var sec = target.parentElement;
+        if (sec) sec.style.position = 'relative';
+        if (!existing){
+          var btn = document.createElement('button');
+          btn.type = 'button'; btn.id = 'dsh-add-plugin';
+          btn.textContent = '添加插件';
+          btn.style.cssText = "position:absolute;top:0;right:0;z-index:4;cursor:pointer;border:none;border-radius:8px;padding:6px 14px;font-size:13px;font-weight:600;color:#fff;background:#10b981;box-shadow:0 2px 10px rgba(16,185,129,0.35);";
+          if (sec) sec.appendChild(btn);
+          btn.addEventListener('click', function(){
+            if (window.dshDesktop && window.dshDesktop.importSkill) window.dshDesktop.importSkill();
+          });
+        }
+      } else if (existing){
+        existing.remove();
+      }
+    }
+
+    function observeOptions(){
+      if (!opts) return;
+      if (opts.__dshObs) return;
+      opts.__dshObs = new MutationObserver(mountPluginsButton);
+      opts.__dshObs.observe(opts, { childList: true, subtree: true });
+      mountPluginsButton();
+    }
+
+    function tryMount(){
+      var panel = document.querySelector('[role="dialog"][aria-modal="true"]');
+      if (panel && panel !== currentPanel){
+        currentPanel = panel;
+        opts = null; versionPanel = null;
+        opts = findOptions(panel);
+        var agentBtn = null;
+        var btns = panel.querySelectorAll('button');
+        for (var i = 0; i < btns.length; i++){
+          var t = (btns[i].textContent || '').replace(/\\s+/g, ' ').trim();
+          if (/预设/.test(t) || /presets/i.test(t)){ agentBtn = btns[i]; break; }
+        }
+        if (agentBtn) setupVersionNav(panel, agentBtn);
+        observeOptions();
+      } else if (!panel && currentPanel){
+        currentPanel = null; opts = null; versionPanel = null;
+      }
+    }
+    // 弹窗由 React 动态挂载：轮询 + 观察器双保险，保证任何时机都能检测到设置弹窗
+    var bodyObs = new MutationObserver(tryMount);
+    try { bodyObs.observe(document.body, { childList: true, subtree: true }); } catch (e) {}
+    setInterval(tryMount, 400);
   })()`
 }
 
-function injectVersionBar() {
+function injectSettingsEntrance() {
   if (!mainWindow || mainWindow.isDestroyed()) return
-  const script = buildVersionBarJs().replace('"VERSION_PLACEHOLDER"', JSON.stringify(APP_VERSION))
-  let tries = 0
-  const attempt = () => {
+  const script = buildSettingsEntranceJs()
+  // did-finish-load 后 body 一定存在，直接注入。脚本自身幂等（__dshSettingsEntrance 守卫）。
+  const run = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return
-    mainWindow.webContents.executeJavaScript(`(function(){ return !!document.body })`)
-      .then((hasBody) => {
-        if (hasBody) {
-          mainWindow.webContents.executeJavaScript(script).catch((err) =>
-            console.log('[dsh-desktop] version bar inject error:', err && err.message))
-        } else if (tries < 40) {
-          tries++
-          setTimeout(attempt, 300)
-        }
-      })
-      .catch(() => { if (tries < 40) { tries++; setTimeout(attempt, 300) } })
+    mainWindow.webContents.executeJavaScript(script)
+      .then(() => console.log('[dsh-desktop] settings entrance injected'))
+      .catch((err) => console.log('[dsh-desktop] settings entrance inject error:', err && err.message))
   }
-  attempt()
+  run()
+  // 兜底：SPA 可能在加载完成后仍有重渲染/重导航，延迟再注入几次（幂等）
+  setTimeout(run, 1200)
+  setTimeout(run, 3000)
 }
 
 // ---- GitHub 更新检查 ----
@@ -420,6 +546,8 @@ function createWindow(url) {
 
   mainWindow.loadURL(url)
   installDiagnostics()
+  // 页面每次加载完成后再注入一次设置入口（bootstrap 时页面可能尚未加载完成）
+  mainWindow.webContents.on('did-finish-load', () => injectSettingsEntrance())
 
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
     shell.openExternal(target)
@@ -441,7 +569,7 @@ async function bootstrap() {
 
     installMenu()
     checkForUpdate()
-    injectVersionBar()
+    injectSettingsEntrance()
   } catch (error) {
     stopServer()
     dialog.showErrorBox(
