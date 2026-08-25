@@ -199,23 +199,31 @@ function buildVersionBarJs() {
     bar.style.cssText = "position:fixed;left:50%;transform:translateX(-50%);z-index:2147483001;display:none;align-items:center;gap:14px;padding:10px 18px;border-radius:12px;background:rgba(31,31,34,0.96);border:1px solid rgba(255,255,255,0.10);box-shadow:0 8px 26px rgba(0,0,0,0.45);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#ededf0;";
     bar.innerHTML =
       '<span style="font-size:13px;white-space:nowrap;">版本 <b style="color:#fff;">v' + VERSION + '</b></span>' +
-      '<button id="dsh-ver-check" style="cursor:pointer;border:none;border-radius:7px;padding:6px 14px;font-size:12px;font-weight:600;color:#fff;background:#3b82f6;box-shadow:0 2px 10px rgba(59,130,246,0.35);transition:transform .15s ease;">检查更新</button>';
+      '<button id="dsh-ver-check" style="cursor:pointer;border:none;border-radius:7px;padding:6px 14px;font-size:12px;font-weight:600;color:#fff;background:#3b82f6;box-shadow:0 2px 10px rgba(59,130,246,0.35);transition:transform .15s ease;">检查更新</button>' +
+      '<button id="dsh-import-skill" style="cursor:pointer;border:none;border-radius:7px;padding:6px 14px;font-size:12px;font-weight:600;color:#fff;background:#10b981;box-shadow:0 2px 10px rgba(16,185,129,0.35);transition:transform .15s ease;">导入插件</button>';
     document.body.appendChild(bar);
     document.getElementById('dsh-ver-check').addEventListener('click', function(){
       if (window.dshDesktop && window.dshDesktop.checkUpdate) window.dshDesktop.checkUpdate();
     });
+    document.getElementById('dsh-import-skill').addEventListener('click', function(){
+      if (window.dshDesktop && window.dshDesktop.importSkill) window.dshDesktop.importSkill();
+    });
     function place(){
-      var dlg = document.querySelector('[role="dialog"][aria-modal="true"]');
+      var dlg = document.querySelector('[role="dialog"][aria-modal="true"], [data-modals-root] [role="dialog"], [class*="modal"] [class*="visible"]');
       if (!dlg) { bar.style.display = 'none'; return; }
       var r = dlg.getBoundingClientRect();
-      bar.style.top = (r.bottom + 12) + 'px';
+      var vh = window.innerHeight;
+      if (r.bottom < 0 || r.top > vh) { bar.style.display = 'none'; return; }
+      var top = r.bottom + 12;
+      if (top + bar.offsetHeight + 16 > vh) top = Math.max(12, r.top - bar.offsetHeight - 12);
+      bar.style.top = top + 'px';
       bar.style.display = 'flex';
     }
     var mo = new MutationObserver(place);
     mo.observe(document.body, { childList: true, subtree: true });
     window.addEventListener('resize', place);
     window.__dshVersionBar = true;
-    place();
+    setTimeout(place, 500);
   })()`
 }
 
@@ -433,6 +441,7 @@ async function bootstrap() {
 
     installMenu()
     checkForUpdate()
+    injectVersionBar()
   } catch (error) {
     stopServer()
     dialog.showErrorBox(
