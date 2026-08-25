@@ -1,0 +1,48 @@
+{
+  "name": "dsh-desktop",
+  "productName": "DeepSeek Harness",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness (dsh) 桌面端：后台运行 dsh web 服务并以原生窗口加载 Web UI",
+  "license": "MIT",
+  "main": "main.js",
+  "author": "yuantuhudong",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "^0.1.1-rc.2"
+  },
+  "build": {
+    "appId": "com.yuantuhudong.dsh-desktop",
+    "productName": "DeepSeek Harness",
+    "asar": false,
+    "files": [
+      "main.js",
+      "package.json",
+      "node_modules/**"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    }
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3"
+  }
+}
