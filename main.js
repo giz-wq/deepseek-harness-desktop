@@ -189,6 +189,57 @@ function injectUpdateBanner(newVersion) {
   attempt()
 }
 
+// ---- 设置弹窗内的「版本与更新」条形（挂在 body 上，设置弹窗打开时吸附其下方显示）----
+function buildVersionBarJs() {
+  return `(function(){
+    if (window.__dshVersionBar) return;
+    var VERSION = "VERSION_PLACEHOLDER";
+    var bar = document.createElement('div');
+    bar.id = 'dsh-version-bar';
+    bar.style.cssText = "position:fixed;left:50%;transform:translateX(-50%);z-index:2147483001;display:none;align-items:center;gap:14px;padding:10px 18px;border-radius:12px;background:rgba(31,31,34,0.96);border:1px solid rgba(255,255,255,0.10);box-shadow:0 8px 26px rgba(0,0,0,0.45);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#ededf0;";
+    bar.innerHTML =
+      '<span style="font-size:13px;white-space:nowrap;">版本 <b style="color:#fff;">v' + VERSION + '</b></span>' +
+      '<button id="dsh-ver-check" style="cursor:pointer;border:none;border-radius:7px;padding:6px 14px;font-size:12px;font-weight:600;color:#fff;background:#3b82f6;box-shadow:0 2px 10px rgba(59,130,246,0.35);transition:transform .15s ease;">检查更新</button>';
+    document.body.appendChild(bar);
+    document.getElementById('dsh-ver-check').addEventListener('click', function(){
+      if (window.dshDesktop && window.dshDesktop.checkUpdate) window.dshDesktop.checkUpdate();
+    });
+    function place(){
+      var dlg = document.querySelector('[role="dialog"][aria-modal="true"]');
+      if (!dlg) { bar.style.display = 'none'; return; }
+      var r = dlg.getBoundingClientRect();
+      bar.style.top = (r.bottom + 12) + 'px';
+      bar.style.display = 'flex';
+    }
+    var mo = new MutationObserver(place);
+    mo.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener('resize', place);
+    window.__dshVersionBar = true;
+    place();
+  })()`
+}
+
+function injectVersionBar() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const script = buildVersionBarJs().replace('"VERSION_PLACEHOLDER"', JSON.stringify(APP_VERSION))
+  let tries = 0
+  const attempt = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    mainWindow.webContents.executeJavaScript(`(function(){ return !!document.body })`)
+      .then((hasBody) => {
+        if (hasBody) {
+          mainWindow.webContents.executeJavaScript(script).catch((err) =>
+            console.log('[dsh-desktop] version bar inject error:', err && err.message))
+        } else if (tries < 40) {
+          tries++
+          setTimeout(attempt, 300)
+        }
+      })
+      .catch(() => { if (tries < 40) { tries++; setTimeout(attempt, 300) } })
+  }
+  attempt()
+}
+
 // ---- GitHub 更新检查 ----
 async function checkForUpdate() {
   try {
@@ -408,6 +459,46 @@ function registerIpc() {
   ipcMain.handle('dsh:import-skill', async () => {
     await importSkill();
   });
+  ipcMain.handle('dsh:check-update', async () => {
+    await checkUpdate();
+  });
+}
+
+// ---- 设置里的「检查更新」：对比远端，若更高走下载更新，否则提示已最新 ----
+async function checkUpdate() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  try {
+    const res = await fetch('https://api.github.com/repos/' + GITHUB_REPO + '/releases/latest', {
+      headers: { 'User-Agent': 'dsh-desktop', 'Accept': 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (res.status === 404 || !res.ok) {
+      await dialog.showMessageBox(mainWindow, { type: 'info', title: '已是最新版本', message: '当前已是最新版本（v' + APP_VERSION + '）' })
+      return
+    }
+    const data = await res.json()
+    const latest = data && data.tag_name
+    if (!latest) {
+      await dialog.showMessageBox(mainWindow, { type: 'info', title: '已是最新版本', message: '当前已是最新版本（v' + APP_VERSION + '）' })
+      return
+    }
+    if (isNewer(latest, APP_VERSION)) {
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: '发现新版本',
+        message: '发现新版本 ' + latest + '，是否更新？',
+        detail: '当前版本 v' + APP_VERSION + '\n\n点击「立即更新」将下载新版安装包并打开安装镜像完成更新。',
+        buttons: ['立即更新', '取消'],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      if (response === 0) await downloadAndInstall(latest)
+    } else {
+      await dialog.showMessageBox(mainWindow, { type: 'info', title: '已是最新版本', message: '当前已是最新版本（v' + APP_VERSION + '）' })
+    }
+  } catch (error) {
+    await dialog.showMessageBox(mainWindow, { type: 'error', title: '检查更新失败', message: String((error && error.message) || error) })
+  }
 }
 
 app.whenReady().then(async () => { registerIpc(); await bootstrap() })
