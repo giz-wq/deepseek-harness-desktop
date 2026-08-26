@@ -9,7 +9,8 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --mac",
-    "dist:win": "electron-builder --win"
+    "win:native-deps": "npm install --force --no-save @koromix/koffi-win32-x64@3.1.6 node-addon-require-builtin-win32-x64-msvc@0.1.5 @img/sharp-win32-x64@0.35.3 @vscode/ripgrep-win32-x64@1.18.0",
+    "dist:win": "npm run win:native-deps && electron-builder --win"
   },
   "dependencies": {
     "@deepseek-ai/dsh": "0.1.1-rc.2",
@@ -248,6 +249,22 @@
         }
       ],
       "icon": "build/DeepSeek_Harness.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ],
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "DeepSeek Harness",
+      "uninstallDisplayName": "DeepSeek Harness",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
     },
     "npmRebuild": false
   },
